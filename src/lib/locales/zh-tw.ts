@@ -1481,6 +1481,9 @@ const zhTw: Record<string, string> = {
   "lora.view_civitai": "在 CivitAI 上檢視",
   "lora.add_to_prompt": "新增到提示詞：{word}",
   "lora.likes": "按讚",
+  "lora.filter_by_base_model": "Match checkpoint base model",
+  "lora.filter_no_match": "No LoRAs match checkpoint base model",
+  "lora.filter_incompatible": "{count} LoRAs hidden (incompatible base model)",
 
   // ── 底部面板 ────────────────────────────────────────────
   "bottom_panel.tab.loras": "LoRA",

@@ -1481,6 +1481,9 @@ const pt: Record<string, string> = {
   "lora.view_civitai": "Ver no CivitAI",
   "lora.add_to_prompt": "Adicionar ao prompt: {word}",
   "lora.likes": "Curtidas",
+  "lora.filter_by_base_model": "Match checkpoint base model",
+  "lora.filter_no_match": "No LoRAs match checkpoint base model",
+  "lora.filter_incompatible": "{count} LoRAs hidden (incompatible base model)",
 
   // ── Painel Inferior ─────────────────────────────────────
   "bottom_panel.tab.loras": "LoRAs",
