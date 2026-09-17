@@ -10,6 +10,7 @@
     civitaiLookupImage,
     fetchCachedImage,
     getLoraCivitaiInfo,
+    getCheckpointCivitaiInfo,
     saveModelSidecarThumbnail,
     type LoraCivitaiInfo,
   } from "../../utils/api.js";
@@ -95,6 +96,42 @@
   let presetError = $state<string | null>(null);
   let loraInfoAccessBlocked = $state<string | null>(null);
 
+  // Base model filter state
+  let filterByBaseModel = $state(false);
+  let currentCheckpointBaseModel = $state<string | null>(null);
+  let checkpointLoading = $state(false);
+
+  // Normalize base model string for comparison
+  function normalizeBaseModel(baseModel: string | null | undefined): string | null {
+    if (!baseModel) return null;
+    const normalized = baseModel.toLowerCase().replace(/[\s._-]/g, "");
+    return normalized;
+  }
+
+  // Check if two base models are compatible
+  function baseModelsMatch(model: string | null | undefined, checkpoint: string | null | undefined): boolean {
+    if (!model || !checkpoint) return true; // No info means assume compatible
+    const normModel = normalizeBaseModel(model);
+    const normCheckpoint = normalizeBaseModel(checkpoint);
+    if (!normModel || !normCheckpoint) return true;
+    return normModel === normCheckpoint;
+  }
+
+  // Fetch current checkpoint's base model when filter is enabled
+  async function fetchCheckpointBaseModel() {
+    const checkpoint = generation.checkpoint;
+    if (!checkpoint || checkpointLoading) return;
+    checkpointLoading = true;
+    try {
+      const info = await getCheckpointCivitaiInfo(checkpoint);
+      currentCheckpointBaseModel = info.base_model || null;
+    } catch {
+      currentCheckpointBaseModel = null;
+    } finally {
+      checkpointLoading = false;
+    }
+  }
+
   function isAccessDeniedError(message: string): boolean {
     const text = message.toLowerCase();
     return (
@@ -118,7 +155,7 @@
     } catch {}
   });
 
-  // All available LoRAs, filtered by search
+  // All available LoRAs, filtered by search and base model
   const filteredLoras = $derived(() => {
     const q = searchQuery.toLowerCase().trim();
     let list = models.loras;
@@ -127,6 +164,14 @@
         const display = displayName(name).toLowerCase();
         const filename = name.toLowerCase();
         return display.includes(q) || filename.includes(q);
+      });
+    }
+    // Filter by base model if enabled
+    if (filterByBaseModel && currentCheckpointBaseModel) {
+      list = list.filter((name) => {
+        const loraInfo = cache[name]?.data;
+        const loraBaseModel = loraInfo?.civitai_base_model || loraInfo?.modelspec_architecture;
+        return baseModelsMatch(loraBaseModel, currentCheckpointBaseModel);
       });
     }
     const enabledSet = new Set(
@@ -708,6 +753,30 @@
       />
     </div>
     </div>
+
+    <!-- Base model filter toggle -->
+    <div class="flex items-center gap-2 px-1">
+      <label class="flex items-center gap-1.5 cursor-pointer">
+        <input
+          type="checkbox"
+          bind:checked={filterByBaseModel}
+          onchange={() => {
+            if (filterByBaseModel) {
+              void fetchCheckpointBaseModel();
+            }
+          }}
+          class="w-3.5 h-3.5 accent-indigo-500 cursor-pointer"
+        />
+        <span class="text-[10px] text-neutral-400">
+          {locale.t('lora.filter_by_base_model') || 'Match checkpoint base model'}
+          {#if checkpointLoading}
+            <span class="text-neutral-500">...</span>
+          {:else if filterByBaseModel && currentCheckpointBaseModel}
+            <span class="text-indigo-400">({currentCheckpointBaseModel})</span>
+          {/if}
+        </span>
+      </label>
+    </div>
   </div>
 
   {#if loraInfoAccessBlocked}
@@ -733,7 +802,9 @@
     </div>
   {:else if filteredLoras().length === 0}
     <div class="flex items-center justify-center flex-1 text-neutral-500 text-xs">
-      <p>{locale.t('lora.no_results', { query: searchQuery })}</p>
+      <p>{filterByBaseModel && currentCheckpointBaseModel
+        ? locale.t('lora.filter_no_match')
+        : locale.t('lora.no_results', { query: searchQuery })}</p>
     </div>
   {:else}
     {#snippet loraCard(loraName: string)}
