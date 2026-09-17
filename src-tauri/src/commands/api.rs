@@ -6237,23 +6237,6 @@ pub async fn get_lora_civitai_info(
                                 info.thumbnail_url =
                                     info.civitai_images.first().map(|i| i.url.clone());
                             }
-
-                            // Cache preview images (up to 5)
-                            let image_urls: Vec<String> = info
-                                .civitai_images
-                                .iter()
-                                .take(5)
-                                .map(|i| i.url.clone())
-                                .collect();
-                            log::info!("CivArchive: caching {} images for '{}'", image_urls.len(), filename);
-                            for url in image_urls {
-                                let http_client = state.http_client.clone();
-                                let filename_clone = filename.clone();
-                                tokio::spawn(async move {
-                                    let cached = cache_external_image(&http_client, &url).await;
-                                    log::debug!("CivArchive: image {} cached={} for '{}'", url, cached, filename_clone);
-                                });
-                            }
                         }
                     }
 
@@ -7659,64 +7642,6 @@ pub(crate) async fn cache_image_from_url(
     }
 }
 
-/// Cache an external image (TensorArt, etc.) via simple HTTP fetch.
-/// Unlike `cache_image_from_url`, this doesn't require CivitAI auth.
-pub(crate) async fn cache_external_image(
-    http_client: &reqwest::Client,
-    url: &str,
-) -> bool {
-    let cache_path = match image_cache_path(url) {
-        Some(p) => p,
-        None => {
-            log::warn!("cache_external_image: could not get cache path for {}", url);
-            return false;
-        }
-    };
-
-    // Skip if already cached
-    if cache_path.is_file() {
-        log::debug!("cache_external_image: already cached {}", url);
-        return true;
-    }
-
-    // Create cache directory
-    if let Some(cache_dir) = image_cache_dir() {
-        let _ = std::fs::create_dir_all(&cache_dir);
-    }
-
-    log::info!("cache_external_image: fetching {} (cache_path: {:?})", url, cache_path);
-
-    // Simple fetch without auth (for public images)
-    match http_client
-        .get(url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            match resp.bytes().await {
-                Ok(bytes) => {
-                    log::info!("cache_external_image: downloaded {} bytes from {}", bytes.len(), url);
-                    let _ = std::fs::write(&cache_path, &bytes);
-                    true
-                }
-                Err(e) => {
-                    log::warn!("cache_external_image: failed to read bytes from {}: {}", url, e);
-                    false
-                }
-            }
-        }
-        Ok(resp) => {
-            log::warn!("cache_external_image: {} returned HTTP {}", url, resp.status());
-            false
-        }
-        Err(e) => {
-            log::warn!("cache_external_image: failed to fetch {}: {}", url, e);
-            false
-        }
-    }
-}
-
 /// Extract image URLs from CivitAI API response data.
 pub(crate) fn extract_civitai_image_urls(data: &Value) -> Vec<String> {
     let mut urls = Vec::new();
@@ -8541,37 +8466,7 @@ where
                 continue 'retry;
             }
             if status.as_u16() == 404 {
-                // Not indexed on CivitAI -- try CivArchive fallback
-                log::info!("civitai_bulk_scan: {} not on CivitAI, trying CivArchive", filename);
-                match scrape_civarchive_page(&state.http_client, &sha256).await {
-                    Ok(models) if !models.is_empty() => {
-                        // Found on CivArchive - cache images
-                        log::info!("civitai_bulk_scan: {} found on CivArchive ({} models)", filename, models.len());
-                        for model in models.iter().take(3) {
-                            if let Some(version) = model.get("version") {
-                                if let Some(images) = version.get("images").and_then(|v| v.as_array()) {
-                                    for img in images.iter().take(5) {
-                                        if let Some(url) = img.get("url").and_then(|u| u.as_str()) {
-                                            let url = url.to_string();
-                                            let http_client = state.http_client.clone();
-                                            let filename_clone = filename.clone();
-                                            tokio::spawn(async move {
-                                                let cached = cache_external_image(&http_client, &url).await;
-                                                log::debug!("civitai_bulk_scan: CivArchive image {} cached={} for '{}'", url, cached, filename_clone);
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Ok(_) => {
-                        log::debug!("civitai_bulk_scan: {} not found on CivArchive either", filename);
-                    }
-                    Err(e) => {
-                        log::debug!("civitai_bulk_scan: CivArchive lookup failed for {}: {}", filename, e);
-                    }
-                }
+                // Not indexed on CivitAI -- CivArchive fallback handled in get_lora_civitai_info
                 break 'retry;
             }
             if !status.is_success() {

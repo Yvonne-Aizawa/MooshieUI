@@ -4597,22 +4597,6 @@ async fn dispatch_command(
                                 }
                             }
 
-                            // Cache preview images (up to 5)
-                            if let Some(images) = result["civitai_images"].as_array() {
-                                let count = images.len();
-                                log::info!("webserver CivArchive: caching {} images", count);
-                                for img in images.iter().take(5) {
-                                    if let Some(url) = img.get("url").and_then(|u| u.as_str()) {
-                                        let url = url.to_string();
-                                        let http_client = state.http_client.clone();
-                                        tokio::spawn(async move {
-                                            let cached = commands::api::cache_external_image(&http_client, &url).await;
-                                            log::debug!("webserver CivArchive: image {} cached={}", url, cached);
-                                        });
-                                    }
-                                }
-                            }
-
                             result["civitai_source"] = serde_json::json!("civarchive");
                         }
                     }
