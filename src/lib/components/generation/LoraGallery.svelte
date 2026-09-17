@@ -110,10 +110,10 @@
 
   // Check if two base models are compatible
   function baseModelsMatch(model: string | null | undefined, checkpoint: string | null | undefined): boolean {
-    if (!model || !checkpoint) return true; // No info means assume compatible
+    if (!model || !checkpoint) return false; // No info = don't know if compatible, so hide
     const normModel = normalizeBaseModel(model);
     const normCheckpoint = normalizeBaseModel(checkpoint);
-    if (!normModel || !normCheckpoint) return true;
+    if (!normModel || !normCheckpoint) return false;
     return normModel === normCheckpoint;
   }
 
