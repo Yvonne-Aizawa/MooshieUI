@@ -8541,7 +8541,37 @@ where
                 continue 'retry;
             }
             if status.as_u16() == 404 {
-                // Not indexed on CivitAI -- normal, not an error.
+                // Not indexed on CivitAI -- try CivArchive fallback
+                log::info!("civitai_bulk_scan: {} not on CivitAI, trying CivArchive", filename);
+                match scrape_civarchive_page(&state.http_client, &sha256).await {
+                    Ok(models) if !models.is_empty() => {
+                        // Found on CivArchive - cache images
+                        log::info!("civitai_bulk_scan: {} found on CivArchive ({} models)", filename, models.len());
+                        for model in models.iter().take(3) {
+                            if let Some(version) = model.get("version") {
+                                if let Some(images) = version.get("images").and_then(|v| v.as_array()) {
+                                    for img in images.iter().take(5) {
+                                        if let Some(url) = img.get("url").and_then(|u| u.as_str()) {
+                                            let url = url.to_string();
+                                            let http_client = state.http_client.clone();
+                                            let filename_clone = filename.clone();
+                                            tokio::spawn(async move {
+                                                let cached = cache_external_image(&http_client, &url).await;
+                                                log::debug!("civitai_bulk_scan: CivArchive image {} cached={} for '{}'", url, cached, filename_clone);
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        log::debug!("civitai_bulk_scan: {} not found on CivArchive either", filename);
+                    }
+                    Err(e) => {
+                        log::debug!("civitai_bulk_scan: CivArchive lookup failed for {}: {}", filename, e);
+                    }
+                }
                 break 'retry;
             }
             if !status.is_success() {
