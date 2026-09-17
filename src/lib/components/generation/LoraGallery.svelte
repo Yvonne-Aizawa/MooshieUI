@@ -761,7 +761,7 @@
           type="checkbox"
           bind:checked={filterByBaseModel}
           onchange={() => {
-            if (filterByBaseModel) {
+            if (filterByBaseModel && !currentCheckpointBaseModel) {
               void fetchCheckpointBaseModel();
             }
           }}
@@ -773,6 +773,8 @@
             <span class="text-neutral-500">...</span>
           {:else if filterByBaseModel && currentCheckpointBaseModel}
             <span class="text-indigo-400">({currentCheckpointBaseModel})</span>
+          {:else if filterByBaseModel && !currentCheckpointBaseModel && !checkpointLoading}
+            <span class="text-neutral-500">?</span>
           {/if}
         </span>
       </label>
