@@ -6245,10 +6245,13 @@ pub async fn get_lora_civitai_info(
                                 .take(5)
                                 .map(|i| i.url.clone())
                                 .collect();
+                            log::info!("CivArchive: caching {} images for '{}'", image_urls.len(), filename);
                             for url in image_urls {
                                 let http_client = state.http_client.clone();
+                                let filename_clone = filename.clone();
                                 tokio::spawn(async move {
-                                    let _ = cache_external_image(&http_client, &url).await;
+                                    let cached = cache_external_image(&http_client, &url).await;
+                                    log::debug!("CivArchive: image {} cached={} for '{}'", url, cached, filename_clone);
                                 });
                             }
                         }
@@ -7619,11 +7622,15 @@ pub(crate) async fn cache_image_from_url(
 ) -> bool {
     let cache_path = match image_cache_path(url) {
         Some(p) => p,
-        None => return false,
+        None => {
+            log::warn!("cache_image_from_url: could not get cache path for {}", url);
+            return false;
+        }
     };
 
     // Skip if already cached
     if cache_path.is_file() {
+        log::debug!("cache_image_from_url: already cached {}", url);
         return true;
     }
 
@@ -7633,9 +7640,12 @@ pub(crate) async fn cache_image_from_url(
     }
 
     // Try to fetch the image (only CivitAI URLs for now)
-    if parse_civitai_image_url(url).is_err() {
+    if let Err(e) = parse_civitai_image_url(url) {
+        log::debug!("cache_image_from_url: URL not allowed for CivitAI images: {} - {}", url, e);
         return false;
     }
+
+    log::info!("cache_image_from_url: fetching {}", url);
 
     match fetch_civitai_image_bytes(state.as_ref(), url).await {
         Ok(bytes) => {
@@ -7657,11 +7667,15 @@ pub(crate) async fn cache_external_image(
 ) -> bool {
     let cache_path = match image_cache_path(url) {
         Some(p) => p,
-        None => return false,
+        None => {
+            log::warn!("cache_external_image: could not get cache path for {}", url);
+            return false;
+        }
     };
 
     // Skip if already cached
     if cache_path.is_file() {
+        log::debug!("cache_external_image: already cached {}", url);
         return true;
     }
 
@@ -7669,6 +7683,8 @@ pub(crate) async fn cache_external_image(
     if let Some(cache_dir) = image_cache_dir() {
         let _ = std::fs::create_dir_all(&cache_dir);
     }
+
+    log::info!("cache_external_image: fetching {} (cache_path: {:?})", url, cache_path);
 
     // Simple fetch without auth (for public images)
     match http_client
@@ -7680,21 +7696,22 @@ pub(crate) async fn cache_external_image(
         Ok(resp) if resp.status().is_success() => {
             match resp.bytes().await {
                 Ok(bytes) => {
+                    log::info!("cache_external_image: downloaded {} bytes from {}", bytes.len(), url);
                     let _ = std::fs::write(&cache_path, &bytes);
                     true
                 }
                 Err(e) => {
-                    log::debug!("Failed to read external image {}: {}", url, e);
+                    log::warn!("cache_external_image: failed to read bytes from {}: {}", url, e);
                     false
                 }
             }
         }
         Ok(resp) => {
-            log::debug!("External image {} returned HTTP {}", url, resp.status());
+            log::warn!("cache_external_image: {} returned HTTP {}", url, resp.status());
             false
         }
         Err(e) => {
-            log::debug!("Failed to fetch external image {}: {}", url, e);
+            log::warn!("cache_external_image: failed to fetch {}: {}", url, e);
             false
         }
     }
@@ -8577,12 +8594,15 @@ where
 
             // Cache preview images (up to 5)
             let image_urls = extract_civitai_image_urls(&data);
+            log::info!("civitai_bulk_scan: caching {} images for '{}'", image_urls.len(), filename);
             for url in image_urls.iter().take(5) {
                 // Spawn background task to cache image (don't block scan)
                 let url = url.clone();
                 let state = Arc::clone(state);
+                let filename_clone = filename.clone();
                 tokio::spawn(async move {
-                    let _ = cache_image_from_url(&state, &url).await;
+                    let cached = cache_image_from_url(&state, &url).await;
+                    log::debug!("civitai_bulk_scan: image {} cached={} for '{}'", url, cached, filename_clone);
                 });
             }
 
