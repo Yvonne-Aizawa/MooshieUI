@@ -3429,8 +3429,15 @@ fn is_allowed_civitai_image_host(host: &str) -> bool {
     // Accept civitai.com and any of its subdomains (image.civitai.com,
     // cdn.civitai.com, and any future image host CivitAI introduces). The
     // trailing-dot match keeps look-alikes like "civitai.com.evil.test" out.
+    // Also accept image hosts from platforms indexed by CivArchive.
     let host = host.to_ascii_lowercase();
-    host == "civitai.com" || host.ends_with(".civitai.com")
+    host == "civitai.com"
+        || host.ends_with(".civitai.com")
+        || host.ends_with(".tensorartassets.com")
+        || host.ends_with(".tensorhub-assets.com")
+        || host.ends_with(".civai.app")
+        || host.ends_with(".seaart.ai")
+        || host.ends_with(".pixai.art")
 }
 
 pub(crate) fn parse_civitai_image_url(url: &str) -> Result<reqwest::Url, AppError> {
@@ -6230,6 +6237,20 @@ pub async fn get_lora_civitai_info(
                                 info.thumbnail_url =
                                     info.civitai_images.first().map(|i| i.url.clone());
                             }
+
+                            // Cache preview images (up to 5)
+                            let image_urls: Vec<String> = info
+                                .civitai_images
+                                .iter()
+                                .take(5)
+                                .map(|i| i.url.clone())
+                                .collect();
+                            for url in image_urls {
+                                let http_client = state.http_client.clone();
+                                tokio::spawn(async move {
+                                    let _ = cache_external_image(&http_client, &url).await;
+                                });
+                            }
                         }
                     }
 
@@ -7574,8 +7595,131 @@ pub async fn read_clipboard_image(app: AppHandle) -> Result<Vec<u8>, AppError> {
 }
 
 // ---------------------------------------------------------------------------
+// Image caching utilities
+// ---------------------------------------------------------------------------
+
+/// Cache directory for model preview images.
+fn image_cache_dir() -> Option<std::path::PathBuf> {
+    crate::config::app_data_dir().map(|d| d.join("image_cache"))
+}
+
+/// Get cache path for an image URL.
+fn image_cache_path(url: &str) -> Option<std::path::PathBuf> {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    sha2::Digest::update(&mut hasher, url.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    image_cache_dir().map(|d| d.join(hash))
+}
+
+/// Cache an image from a URL. Returns true if cached (or already exists).
+pub(crate) async fn cache_image_from_url(
+    state: &Arc<AppState>,
+    url: &str,
+) -> bool {
+    let cache_path = match image_cache_path(url) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // Skip if already cached
+    if cache_path.is_file() {
+        return true;
+    }
+
+    // Create cache directory
+    if let Some(cache_dir) = image_cache_dir() {
+        let _ = std::fs::create_dir_all(&cache_dir);
+    }
+
+    // Try to fetch the image (only CivitAI URLs for now)
+    if parse_civitai_image_url(url).is_err() {
+        return false;
+    }
+
+    match fetch_civitai_image_bytes(state.as_ref(), url).await {
+        Ok(bytes) => {
+            let _ = std::fs::write(&cache_path, &bytes);
+            true
+        }
+        Err(e) => {
+            log::debug!("Failed to cache image {}: {}", url, e);
+            false
+        }
+    }
+}
+
+/// Cache an external image (TensorArt, etc.) via simple HTTP fetch.
+/// Unlike `cache_image_from_url`, this doesn't require CivitAI auth.
+pub(crate) async fn cache_external_image(
+    http_client: &reqwest::Client,
+    url: &str,
+) -> bool {
+    let cache_path = match image_cache_path(url) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // Skip if already cached
+    if cache_path.is_file() {
+        return true;
+    }
+
+    // Create cache directory
+    if let Some(cache_dir) = image_cache_dir() {
+        let _ = std::fs::create_dir_all(&cache_dir);
+    }
+
+    // Simple fetch without auth (for public images)
+    match http_client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.bytes().await {
+                Ok(bytes) => {
+                    let _ = std::fs::write(&cache_path, &bytes);
+                    true
+                }
+                Err(e) => {
+                    log::debug!("Failed to read external image {}: {}", url, e);
+                    false
+                }
+            }
+        }
+        Ok(resp) => {
+            log::debug!("External image {} returned HTTP {}", url, resp.status());
+            false
+        }
+        Err(e) => {
+            log::debug!("Failed to fetch external image {}: {}", url, e);
+            false
+        }
+    }
+}
+
+/// Extract image URLs from CivitAI API response data.
+pub(crate) fn extract_civitai_image_urls(data: &Value) -> Vec<String> {
+    let mut urls = Vec::new();
+
+    // Try images array at version level
+    if let Some(images) = data.get("images").and_then(|v| v.as_array()) {
+        for img in images {
+            if let Some(url) = img.get("url").and_then(|u| u.as_str()) {
+                urls.push(url.to_string());
+            }
+        }
+    }
+
+    urls
+}
+
+// ---------------------------------------------------------------------------
 // GPU stats — live nvidia-smi data + worker status
 // ---------------------------------------------------------------------------
+
 
 /// Per-GPU stats returned to the frontend.
 #[derive(Debug, Clone, Serialize)]
@@ -8430,6 +8574,18 @@ where
                     }
                 }
             }
+
+            // Cache preview images (up to 5)
+            let image_urls = extract_civitai_image_urls(&data);
+            for url in image_urls.iter().take(5) {
+                // Spawn background task to cache image (don't block scan)
+                let url = url.clone();
+                let state = Arc::clone(state);
+                tokio::spawn(async move {
+                    let _ = cache_image_from_url(&state, &url).await;
+                });
+            }
+
             emit(serde_json::json!({
                 "current": current,
                 "total": total,
