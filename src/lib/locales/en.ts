@@ -2424,6 +2424,8 @@ const en: Record<string, string> = {
   "settings.civitai.api_key_placeholder": "Paste your CivitAI API key here",
   "settings.civitai.api_key_desc": "Used for model metadata lookups, sample image fetching, and downloads. Required since CivitAI restricted unauthenticated access.",
   "settings.civitai.api_key_link": "Get your key at civitai.com/user/account",
+  "settings.civitai.lookup_enabled": "Automatic CivitAI lookup",
+  "settings.civitai.lookup_enabled_desc": "Automatically fetch model info and thumbnails from CivitAI. Disable to use only local sidecar images.",
   "settings.novelai.title": "NovelAI",
   "settings.novelai.api_key": "API Key",
   "settings.novelai.api_key_desc": "Adds NovelAI's image models to the model list. Generations run on NovelAI's servers and spend your Anlas.",

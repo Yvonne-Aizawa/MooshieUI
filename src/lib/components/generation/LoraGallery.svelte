@@ -9,6 +9,7 @@
   import {
     civitaiLookupImage,
     fetchCachedImage,
+    getConfig,
     getLoraCivitaiInfo,
     saveModelSidecarThumbnail,
     type LoraCivitaiInfo,
@@ -94,6 +95,17 @@
   let presetStatus = $state<string | null>(null);
   let presetError = $state<string | null>(null);
   let loraInfoAccessBlocked = $state<string | null>(null);
+  let civitaiLookupEnabled = $state(true);
+
+  // Load config to check civitai_lookup_enabled on mount
+  $effect(() => {
+    void (async () => {
+      try {
+        const cfg = await getConfig();
+        civitaiLookupEnabled = cfg.civitai_lookup_enabled !== false;
+      } catch {}
+    })();
+  });
 
   function isAccessDeniedError(message: string): boolean {
     const text = message.toLowerCase();
@@ -341,8 +353,16 @@
     const info = getInfo(filename);
     if (!info) return [];
     const urls: string[] = [];
-    if (info.thumbnail_url) urls.push(info.thumbnail_url);
-    if (info.civitai_images) {
+    // Only include thumbnail_url if it's a local sidecar (data: URI).
+    // Skip it when the setting is off or when it's a CivitAI HTTPS URL.
+    if (
+      info.thumbnail_url &&
+      (civitaiLookupEnabled || info.thumbnail_url.startsWith("data:"))
+    ) {
+      urls.push(info.thumbnail_url);
+    }
+    // Skip CivitAI gallery images if the lookup is disabled in settings
+    if (civitaiLookupEnabled && info.civitai_images) {
       for (const img of info.civitai_images) {
         if (img.url !== info.thumbnail_url) urls.push(img.url);
       }

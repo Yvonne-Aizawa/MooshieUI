@@ -2226,6 +2226,8 @@ const ko: Record<string, string> = {
   "settings.civitai.api_key": "API 키",
   "settings.civitai.api_key_placeholder": "CivitAI API 키를 여기에 붙여넣기",
   "settings.civitai.api_key_desc": "모델 메타데이터 조회, 샘플 이미지 가져오기 및 다운로드에 사용됩니다. CivitAI가 비인증 접근을 제한한 이후 필수입니다.",
+  "settings.civitai.lookup_enabled": "LoRA thumbnails from CivitAI",
+  "settings.civitai.lookup_enabled_desc": "Fetch LoRA thumbnails and metadata from CivitAI when no local sidecar image exists.",
   "settings.civitai.api_key_link": "civitai.com/user/account 에서 키 발급",
   "settings.novelai.title": "NovelAI",
   "settings.novelai.api_key": "API 키",

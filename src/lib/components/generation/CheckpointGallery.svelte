@@ -5,6 +5,7 @@
   import {
     civitaiLookupImage,
     getCheckpointCivitaiInfo,
+    getConfig,
     saveModelSidecarThumbnail,
     type CheckpointCivitaiInfo,
   } from "../../utils/api.js";
@@ -62,6 +63,18 @@
   let searchQuery = $state("");
   let civitaiImageRef = $state("");
   let civitaiImportBusy = $state(false);
+  let civitaiLookupEnabled = $state(true);
+
+  // Load config to check civitai_lookup_enabled on mount
+  $effect(() => {
+    void (async () => {
+      try {
+        const cfg = await getConfig();
+        civitaiLookupEnabled = cfg.civitai_lookup_enabled !== false;
+      } catch {}
+    })();
+  });
+
   let sortMode = $state<ModelGallerySort>(
     (typeof window !== "undefined" &&
       (localStorage.getItem(SORT_KEY) as ModelGallerySort | null)) ||
@@ -183,8 +196,15 @@
     const info = civitaiCache[filename]?.data;
     if (!info) return [];
     const urls: string[] = [];
-    if (info.thumbnail_url) urls.push(info.thumbnail_url);
-    if (info.civitai_images) {
+    // Only include thumbnail_url if it's a local sidecar (data: URI).
+    if (
+      info.thumbnail_url &&
+      (civitaiLookupEnabled || info.thumbnail_url.startsWith("data:"))
+    ) {
+      urls.push(info.thumbnail_url);
+    }
+    // Skip CivitAI gallery images if the lookup is disabled in settings
+    if (civitaiLookupEnabled && info.civitai_images) {
       for (const img of info.civitai_images) {
         if (img.url !== info.thumbnail_url) urls.push(img.url);
       }

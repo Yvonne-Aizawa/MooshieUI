@@ -623,6 +623,8 @@ export interface AppConfig {
   civitai_api_key: string | null;
   /** Present in browser mode for non-admin users when a server-side key is configured. */
   civitai_api_key_configured?: boolean;
+  /** Enable automatic CivitAI hash/metadata lookup for LoRA and checkpoint info. Default: true. */
+  civitai_lookup_enabled?: boolean;
   /** Never populated for clients: the key is redacted to null on the way out. */
   novelai_api_key: string | null;
   /** True when a key is stored, so the UI can show "key set" without the value. */

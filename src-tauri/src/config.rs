@@ -124,6 +124,10 @@ pub struct AppConfig {
     pub prompt_assistant_setup_done: bool,
     /// Optional CivitAI API key for authenticated hash lookups and metadata fetching
     pub civitai_api_key: Option<String>,
+    /// Enable automatic CivitAI hash/metadata lookup for LoRA and checkpoint info.
+    /// When false, only local sidecar images are used; manual fetches (ModelHub, bulk scan) are unaffected.
+    #[serde(default = "default_true")]
+    pub civitai_lookup_enabled: bool,
     /// Optional NovelAI API key. Required before any NovelAI model can be used.
     #[serde(default)]
     pub novelai_api_key: Option<String>,
@@ -298,6 +302,7 @@ impl Default for AppConfig {
             prompt_assistant_idle_timeout_secs: 30,
             prompt_assistant_setup_done: false,
             civitai_api_key: None,
+            civitai_lookup_enabled: true,
             novelai_api_key: None,
             gallery_path: None,
             browser_mode: false,

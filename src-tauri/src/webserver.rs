@@ -4321,7 +4321,7 @@ async fn dispatch_command(
                 .as_str()
                 .ok_or("Missing filename")?
                 .to_string();
-            let (comfyui_path, extra_model_paths, civitai_api_key) = {
+            let (comfyui_path, extra_model_paths, civitai_api_key, civitai_lookup_enabled) = {
                 let config = state.config.read().await;
                 if config.comfyui_path.is_empty() {
                     return Err("ComfyUI path not configured".into());
@@ -4330,6 +4330,7 @@ async fn dispatch_command(
                     config.comfyui_path.clone(),
                     config.extra_model_paths.clone(),
                     config.civitai_api_key.clone(),
+                    config.civitai_lookup_enabled,
                 )
             };
             let category = if command == "get_lora_civitai_info" {
@@ -4369,22 +4370,27 @@ async fn dispatch_command(
             let autov2 = crate::commands::api::autov2_hash(&sha256);
 
             // CivitAI lookup by hash
-            let civitai_url = format!(
-                "https://civitai.com/api/v1/model-versions/by-hash/{}",
-                autov2
-            );
-            let mut civitai_req = state
-                .http_client
-                .get(&civitai_url)
-                .header("User-Agent", "MooshieUI/0.7");
-            if let Some(key) = civitai_api_key.filter(|v| !v.trim().is_empty()) {
-                civitai_req = civitai_req.bearer_auth(key);
-            }
-            let civitai_data = match civitai_req.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    resp.json::<serde_json::Value>().await.ok()
+            // CivitAI lookup (skip if disabled in settings)
+            let civitai_data = if civitai_lookup_enabled {
+                let civitai_url = format!(
+                    "https://civitai.com/api/v1/model-versions/by-hash/{}",
+                    autov2
+                );
+                let mut civitai_req = state
+                    .http_client
+                    .get(&civitai_url)
+                    .header("User-Agent", "MooshieUI/0.7");
+                if let Some(key) = civitai_api_key.filter(|v| !v.trim().is_empty()) {
+                    civitai_req = civitai_req.bearer_auth(key);
                 }
-                _ => None,
+                match civitai_req.send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        resp.json::<serde_json::Value>().await.ok()
+                    }
+                    _ => None,
+                }
+            } else {
+                None
             };
 
             // Build result

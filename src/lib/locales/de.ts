@@ -2246,6 +2246,8 @@ const de: Record<string, string> = {
   "settings.civitai.api_key": "API-Schlüssel",
   "settings.civitai.api_key_placeholder": "CivitAI-API-Schlüssel hier einfügen",
   "settings.civitai.api_key_desc": "Wird für Modell-Metadaten, Beispielbilder und Downloads verwendet. Seit CivitAI den unauthentifizierten Zugriff eingeschränkt hat erforderlich.",
+  "settings.civitai.lookup_enabled": "LoRA thumbnails from CivitAI",
+  "settings.civitai.lookup_enabled_desc": "Fetch LoRA thumbnails and metadata from CivitAI when no local sidecar image exists.",
   "settings.civitai.api_key_link": "Schlüssel unter civitai.com/user/account erstellen",
   "settings.novelai.title": "NovelAI",
   "settings.novelai.api_key": "API-Schlüssel",

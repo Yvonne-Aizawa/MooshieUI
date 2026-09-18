@@ -919,6 +919,8 @@ export async function civitaiBulkScanCancel(): Promise<void> {
  * Returns a "data:<mime>;base64,..." string ready for use in <img src>.
  */
 export async function fetchCachedImage(url: string): Promise<string> {
+  // Already a local data URI — no backend round-trip needed.
+  if (url.startsWith("data:")) return url;
   return ipcInvoke("fetch_cached_image", { url });
 }
 

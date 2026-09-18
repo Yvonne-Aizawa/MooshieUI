@@ -5919,7 +5919,7 @@ pub async fn get_lora_civitai_info(
     state: State<'_, Arc<AppState>>,
     filename: String,
 ) -> Result<LoraCivitaiInfo, AppError> {
-    let (comfyui_path, extra_model_paths, civitai_api_key) = {
+    let (comfyui_path, extra_model_paths, civitai_api_key, civitai_lookup_enabled) = {
         let config = state.config.read().await;
         if config.comfyui_path.is_empty() {
             return Err(AppError::Other("ComfyUI path not configured".into()));
@@ -5928,6 +5928,7 @@ pub async fn get_lora_civitai_info(
             config.comfyui_path.clone(),
             config.extra_model_paths.clone(),
             config.civitai_api_key.clone(),
+            config.civitai_lookup_enabled,
         )
     };
 
@@ -5966,19 +5967,24 @@ pub async fn get_lora_civitai_info(
         .map_err(|e| AppError::Other(format!("Hash task failed: {}", e)))??;
     let autov2 = autov2_hash(&sha256);
 
-    // Look up on CivitAI by hash
-    let civitai_url = format!(
-        "https://civitai.com/api/v1/model-versions/by-hash/{}",
-        autov2
-    );
-    let mut civitai_req = state
-        .http_client
-        .get(&civitai_url)
-        .header("User-Agent", "MooshieUI/0.3.9");
-    if let Some(key) = civitai_api_key.filter(|v| !v.trim().is_empty()) {
-        civitai_req = civitai_req.bearer_auth(key);
-    }
-    let civitai_resp = civitai_req.send().await;
+    // Look up on CivitAI by hash (skip if disabled in settings)
+    let civitai_resp = if civitai_lookup_enabled {
+        let civitai_url = format!(
+            "https://civitai.com/api/v1/model-versions/by-hash/{}",
+            autov2
+        );
+        let mut civitai_req = state
+            .http_client
+            .get(&civitai_url)
+            .header("User-Agent", "MooshieUI/0.3.9");
+        if let Some(key) = civitai_api_key.filter(|v| !v.trim().is_empty()) {
+            civitai_req = civitai_req.bearer_auth(key);
+        }
+        Some(civitai_req.send().await)
+    } else {
+        log::debug!("CivitAI LoRA lookup disabled; skipping network request for '{}'", filename);
+        None
+    };
 
     let mut info = LoraCivitaiInfo {
         filename: filename.clone(),
@@ -6012,89 +6018,91 @@ pub async fn get_lora_civitai_info(
     };
 
     // Parse CivitAI response if successful
-    match &civitai_resp {
-        Ok(resp) if !resp.status().is_success() => {
-            log::warn!(
-                "CivitAI hash lookup for lora '{}' returned status {}",
-                filename,
-                resp.status()
-            );
+    if let Some(resp) = civitai_resp {
+        match &resp {
+            Ok(r) if !r.status().is_success() => {
+                log::warn!(
+                    "CivitAI hash lookup for lora '{}' returned status {}",
+                    filename,
+                    r.status()
+                );
+            }
+            Err(e) => {
+                log::warn!("CivitAI hash lookup for lora '{}' failed: {}", filename, e);
+            }
+            _ => {}
         }
-        Err(e) => {
-            log::warn!("CivitAI hash lookup for lora '{}' failed: {}", filename, e);
-        }
-        _ => {}
-    }
-    if let Ok(resp) = civitai_resp {
-        if resp.status().is_success() {
-            if let Ok(data) = resp.json::<Value>().await {
-                // Version-level fields
-                info.civitai_version_id = data.get("id").and_then(|v| v.as_u64());
-                info.civitai_base_model = data
-                    .get("baseModel")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                info.civitai_name = data
-                    .get("model")
-                    .and_then(|m| m.get("name"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                info.civitai_model_id = data.get("modelId").and_then(|v| v.as_u64());
+        if let Ok(response) = resp {
+            if response.status().is_success() {
+                if let Ok(data) = response.json::<Value>().await {
+                    // Version-level fields
+                    info.civitai_version_id = data.get("id").and_then(|v| v.as_u64());
+                    info.civitai_base_model = data
+                        .get("baseModel")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    info.civitai_name = data
+                        .get("model")
+                        .and_then(|m| m.get("name"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    info.civitai_model_id = data.get("modelId").and_then(|v| v.as_u64());
 
-                // Trigger words
-                if let Some(words) = data.get("trainedWords").and_then(|v| v.as_array()) {
-                    info.civitai_trigger_words = words
-                        .iter()
-                        .filter_map(|w| w.as_str().map(String::from))
-                        .collect();
-                }
-
-                // Images
-                if let Some(images) = data.get("images").and_then(|v| v.as_array()) {
-                    info.civitai_images = images
-                        .iter()
-                        .filter_map(|img| {
-                            img.get("url")
-                                .and_then(|u| u.as_str())
-                                .map(|url| LoraCivitaiImage {
-                                    url: url.to_string(),
-                                    width: img
-                                        .get("width")
-                                        .and_then(|w| w.as_u64())
-                                        .map(|w| w as u32),
-                                    height: img
-                                        .get("height")
-                                        .and_then(|h| h.as_u64())
-                                        .map(|h| h as u32),
-                                    nsfw: img.get("nsfwLevel").and_then(|n| n.as_u64()).map(|n| {
-                                        if n <= 1 {
-                                            "None".to_string()
-                                        } else {
-                                            format!("Level{}", n)
-                                        }
-                                    }),
-                                })
-                        })
-                        .collect();
-
-                    if info.thumbnail_url.is_none() {
-                        info.thumbnail_url = info.civitai_images.first().map(|i| i.url.clone());
+                    // Trigger words
+                    if let Some(words) = data.get("trainedWords").and_then(|v| v.as_array()) {
+                        info.civitai_trigger_words = words
+                            .iter()
+                            .filter_map(|w| w.as_str().map(String::from))
+                            .collect();
                     }
-                }
 
-                // Stats from parent model
-                if let Some(stats) = data.get("stats") {
-                    info.civitai_download_count =
-                        stats.get("downloadCount").and_then(|v| v.as_u64());
-                    info.civitai_thumbs_up_count =
-                        stats.get("thumbsUpCount").and_then(|v| v.as_u64());
-                }
+                    // Images
+                    if let Some(images) = data.get("images").and_then(|v| v.as_array()) {
+                        info.civitai_images = images
+                            .iter()
+                            .filter_map(|img| {
+                                img.get("url")
+                                    .and_then(|u| u.as_str())
+                                    .map(|url| LoraCivitaiImage {
+                                        url: url.to_string(),
+                                        width: img
+                                            .get("width")
+                                            .and_then(|w| w.as_u64())
+                                            .map(|w| w as u32),
+                                        height: img
+                                            .get("height")
+                                            .and_then(|h| h.as_u64())
+                                            .map(|h| h as u32),
+                                        nsfw: img.get("nsfwLevel").and_then(|n| n.as_u64()).map(|n| {
+                                            if n <= 1 {
+                                                "None".to_string()
+                                            } else {
+                                                format!("Level{}", n)
+                                            }
+                                        }),
+                                    })
+                            })
+                            .collect();
 
-                // Creator
-                if let Some(model) = data.get("model") {
-                    if let Some(desc) = model.get("description").and_then(|v| v.as_str()) {
-                        // CivitAI returns HTML descriptions; store raw for now
-                        info.civitai_description = Some(desc.to_string());
+                        if info.thumbnail_url.is_none() {
+                            info.thumbnail_url = info.civitai_images.first().map(|i| i.url.clone());
+                        }
+                    }
+
+                    // Stats from parent model
+                    if let Some(stats) = data.get("stats") {
+                        info.civitai_download_count =
+                            stats.get("downloadCount").and_then(|v| v.as_u64());
+                        info.civitai_thumbs_up_count =
+                            stats.get("thumbsUpCount").and_then(|v| v.as_u64());
+                    }
+
+                    // Creator
+                    if let Some(model) = data.get("model") {
+                        if let Some(desc) = model.get("description").and_then(|v| v.as_str()) {
+                            // CivitAI returns HTML descriptions; store raw for now
+                            info.civitai_description = Some(desc.to_string());
+                        }
                     }
                 }
             }
@@ -6115,7 +6123,7 @@ pub async fn get_checkpoint_civitai_info(
     state: State<'_, Arc<AppState>>,
     filename: String,
 ) -> Result<CheckpointCivitaiInfo, AppError> {
-    let (comfyui_path, extra_model_paths, civitai_api_key) = {
+    let (comfyui_path, extra_model_paths, civitai_api_key, civitai_lookup_enabled) = {
         let config = state.config.read().await;
         if config.comfyui_path.is_empty() {
             return Err(AppError::Other("ComfyUI path not configured".into()));
@@ -6124,6 +6132,7 @@ pub async fn get_checkpoint_civitai_info(
             config.comfyui_path.clone(),
             config.extra_model_paths.clone(),
             config.civitai_api_key.clone(),
+            config.civitai_lookup_enabled,
         )
     };
 
@@ -6196,109 +6205,111 @@ pub async fn get_checkpoint_civitai_info(
     let autov2 = autov2_hash(&sha256);
     info.hash = Some(autov2.clone());
 
-    // CivitAI lookup by AutoV2 hash
-    let civitai_url = format!(
-        "https://civitai.com/api/v1/model-versions/by-hash/{}",
-        autov2
-    );
-    let mut civitai_req = state
-        .http_client
-        .get(&civitai_url)
-        .header("User-Agent", "MooshieUI/0.3.9");
-    if let Some(key) = civitai_api_key.filter(|v| !v.trim().is_empty()) {
-        civitai_req = civitai_req.bearer_auth(key);
-    }
-    let civitai_resp = civitai_req.send().await;
-
-    match &civitai_resp {
-        Ok(resp) if !resp.status().is_success() => {
-            log::warn!(
-                "CivitAI hash lookup for checkpoint '{}' returned status {}",
-                filename,
-                resp.status()
-            );
+    // CivitAI lookup by AutoV2 hash (skip if disabled in settings)
+    if civitai_lookup_enabled {
+        let civitai_url = format!(
+            "https://civitai.com/api/v1/model-versions/by-hash/{}",
+            autov2
+        );
+        let mut civitai_req = state
+            .http_client
+            .get(&civitai_url)
+            .header("User-Agent", "MooshieUI/0.3.9");
+        if let Some(key) = civitai_api_key.filter(|v| !v.trim().is_empty()) {
+            civitai_req = civitai_req.bearer_auth(key);
         }
-        Err(e) => {
-            log::warn!(
-                "CivitAI hash lookup for checkpoint '{}' failed: {}",
-                filename,
-                e
-            );
+        let civitai_resp = civitai_req.send().await;
+
+        match &civitai_resp {
+            Ok(resp) if !resp.status().is_success() => {
+                log::warn!(
+                    "CivitAI hash lookup for checkpoint '{}' returned status {}",
+                    filename,
+                    resp.status()
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "CivitAI hash lookup for checkpoint '{}' failed: {}",
+                    filename,
+                    e
+                );
+            }
+            _ => {}
         }
-        _ => {}
-    }
-    if let Ok(resp) = civitai_resp {
-        if resp.status().is_success() {
-            if let Ok(data) = resp.json::<Value>().await {
-                info.civitai_version_id = data.get("id").and_then(|v| v.as_u64());
-                info.civitai_model_id = data.get("modelId").and_then(|v| v.as_u64());
+        if let Ok(resp) = civitai_resp {
+            if resp.status().is_success() {
+                if let Ok(data) = resp.json::<Value>().await {
+                    info.civitai_version_id = data.get("id").and_then(|v| v.as_u64());
+                    info.civitai_model_id = data.get("modelId").and_then(|v| v.as_u64());
 
-                // Prefer CivitAI base model over modelspec architecture
-                if let Some(bm) = data.get("baseModel").and_then(|v| v.as_str()) {
-                    info.base_model = Some(bm.to_string());
-                }
+                    // Prefer CivitAI base model over modelspec architecture
+                    if let Some(bm) = data.get("baseModel").and_then(|v| v.as_str()) {
+                        info.base_model = Some(bm.to_string());
+                    }
 
-                if info.display_name.is_none() {
-                    info.display_name = data
-                        .get("model")
-                        .and_then(|m| m.get("name"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                }
+                    if info.display_name.is_none() {
+                        info.display_name = data
+                            .get("model")
+                            .and_then(|m| m.get("name"))
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                    }
 
-                // Description + creator from parent model object
-                if let Some(model) = data.get("model") {
-                    info.civitai_description = model
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    info.civitai_creator = model
-                        .get("creator")
-                        .and_then(|c| c.get("username"))
-                        .or_else(|| model.get("user").and_then(|u| u.get("username")))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                }
+                    // Description + creator from parent model object
+                    if let Some(model) = data.get("model") {
+                        info.civitai_description = model
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        info.civitai_creator = model
+                            .get("creator")
+                            .and_then(|c| c.get("username"))
+                            .or_else(|| model.get("user").and_then(|u| u.get("username")))
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                    }
 
-                // Stats
-                if let Some(stats) = data.get("stats") {
-                    info.civitai_download_count =
-                        stats.get("downloadCount").and_then(|v| v.as_u64());
-                    info.civitai_thumbs_up_count =
-                        stats.get("thumbsUpCount").and_then(|v| v.as_u64());
-                }
+                    // Stats
+                    if let Some(stats) = data.get("stats") {
+                        info.civitai_download_count =
+                            stats.get("downloadCount").and_then(|v| v.as_u64());
+                        info.civitai_thumbs_up_count =
+                            stats.get("thumbsUpCount").and_then(|v| v.as_u64());
+                    }
 
-                // All sample images
-                if let Some(images) = data.get("images").and_then(|v| v.as_array()) {
-                    info.civitai_images = images
-                        .iter()
-                        .filter_map(|img| {
-                            img.get("url")
-                                .and_then(|u| u.as_str())
-                                .map(|url| LoraCivitaiImage {
-                                    url: url.to_string(),
-                                    width: img
-                                        .get("width")
-                                        .and_then(|w| w.as_u64())
-                                        .map(|w| w as u32),
-                                    height: img
-                                        .get("height")
-                                        .and_then(|h| h.as_u64())
-                                        .map(|h| h as u32),
-                                    nsfw: img.get("nsfwLevel").and_then(|n| n.as_u64()).map(|n| {
-                                        if n <= 1 {
-                                            "None".to_string()
-                                        } else {
-                                            format!("Level{}", n)
-                                        }
-                                    }),
-                                })
-                        })
-                        .collect();
+                    // All sample images
+                    if let Some(images) = data.get("images").and_then(|v| v.as_array()) {
+                        info.civitai_images = images
+                            .iter()
+                            .filter_map(|img| {
+                                img.get("url")
+                                    .and_then(|u| u.as_str())
+                                    .map(|url| LoraCivitaiImage {
+                                        url: url.to_string(),
+                                        width: img
+                                            .get("width")
+                                            .and_then(|w| w.as_u64())
+                                            .map(|w| w as u32),
+                                        height: img
+                                            .get("height")
+                                            .and_then(|h| h.as_u64())
+                                            .map(|h| h as u32),
+                                        nsfw: img.get("nsfwLevel").and_then(|n| n.as_u64()).map(|n| {
+                                            if n <= 1 {
+                                                "None".to_string()
+                                            } else {
+                                                format!("Level{}", n)
+                                            }
+                                        }),
+                                    })
+                            })
+                            .collect();
 
-                    // Use first CivitAI image as thumbnail only if no local sidecar
-                    if info.thumbnail_url.is_none() {
-                        info.thumbnail_url = info.civitai_images.first().map(|i| i.url.clone());
+                        // Use first CivitAI image as thumbnail only if no local sidecar
+                        if info.thumbnail_url.is_none() {
+                            info.thumbnail_url = info.civitai_images.first().map(|i| i.url.clone());
+                        }
                     }
                 }
             }
@@ -7324,6 +7335,19 @@ pub(crate) fn detect_image_mime(bytes: &[u8]) -> &'static str {
 /// Returns the image as a `"data:<mime>;base64,..."` string so the WebView can
 /// display it without making its own unauthenticated request to CivitAI.
 /// Cache TTL is 7 days; stale or missing entries are refreshed transparently.
+/// Returns true if the URL looks like a CivitAI image host.
+fn is_civitai_image_url(url: &str) -> bool {
+    match reqwest::Url::parse(url) {
+        Ok(parsed) => {
+            parsed.scheme() == "https"
+                && parsed.host_str()
+                    .map(is_allowed_civitai_image_host)
+                    .unwrap_or(false)
+        }
+        Err(_) => false,
+    }
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fetch_cached_image(
@@ -7332,9 +7356,15 @@ pub async fn fetch_cached_image(
 ) -> Result<String, AppError> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    // This backend fetch carries the user's CivitAI token, so keep it scoped to
-    // CivitAI image hosts and validate redirects before touching the cache.
-    parse_civitai_image_url(&url)?;
+    // Basic HTTPS validation for non-CivitAI URLs.
+    if !is_civitai_image_url(&url) {
+        let parsed = reqwest::Url::parse(&url).map_err(|e| {
+            AppError::Other(format!("Invalid image URL: {}", e))
+        })?;
+        if parsed.scheme() != "https" {
+            return Err(AppError::Other("Image URL must use HTTPS".into()));
+        }
+    }
 
     // Build a stable cache filename from the URL hash.
     let mut hasher = sha2::Sha256::new();
@@ -7367,8 +7397,30 @@ pub async fn fetch_cached_image(
         }
     }
 
-    // Cache miss — fetch through the backend so auth headers are applied.
-    let bytes = fetch_civitai_image_bytes(state.inner().as_ref(), &url).await?;
+    // Cache miss — fetch through the backend.
+    let bytes = if is_civitai_image_url(&url) {
+        // CivitAI URLs: use the auth-aware fetch with redirect following.
+        fetch_civitai_image_bytes(state.inner().as_ref(), &url).await?
+    } else {
+        // Other HTTPS URLs: simple fetch, no auth headers.
+        let resp = state
+            .http_client
+            .get(&url)
+            .header("User-Agent", "MooshieUI/0.5.7")
+            .send()
+            .await
+            .map_err(|e| AppError::Other(format!("Image fetch failed: {}", e)))?;
+        if !resp.status().is_success() {
+            return Err(AppError::Other(format!(
+                "Image fetch returned HTTP {}",
+                resp.status()
+            )));
+        }
+        resp.bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| AppError::Other(format!("Failed to read image bytes: {}", e)))?
+    };
 
     // Persist to disk cache (best-effort; ignore write errors).
     let _ = std::fs::write(&cache_path, &bytes);

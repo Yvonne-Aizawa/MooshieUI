@@ -2288,6 +2288,8 @@ const es: Record<string, string> = {
   "settings.civitai.api_key": "Clave API",
   "settings.civitai.api_key_placeholder": "Pegue aquí su clave API de CivitAI",
   "settings.civitai.api_key_desc": "Se usa para metadatos de modelos, imágenes de muestra y descargas. Obligatoria desde que CivitAI restringió el acceso sin autenticación.",
+  "settings.civitai.lookup_enabled": "LoRA thumbnails from CivitAI",
+  "settings.civitai.lookup_enabled_desc": "Fetch LoRA thumbnails and metadata from CivitAI when no local sidecar image exists.",
   "settings.civitai.api_key_link": "Obtenga su clave en civitai.com/user/account",
   "settings.novelai.title": "NovelAI",
   "settings.novelai.api_key": "Clave API",
