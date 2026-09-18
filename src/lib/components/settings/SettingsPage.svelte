@@ -4022,6 +4022,22 @@
               />
               <p class="text-[10px] text-neutral-500 mt-1">{locale.t('settings.civitai.api_key_link')}</p>
             </div>
+
+            <div class="flex items-center justify-between pt-2 border-t border-neutral-800">
+              <div>
+                <label class="text-xs text-neutral-300 font-medium">{locale.t('settings.civitai.lookup_enabled')}</label>
+                <p class="text-xs text-neutral-500 mt-0.5">{locale.t('settings.civitai.lookup_enabled_desc')}</p>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  bind:checked={config!.civitai_lookup_enabled}
+                  onchange={() => autoSave()}
+                  class="sr-only peer"
+                />
+                <div class="w-9 h-5 bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+              </label>
+            </div>
           </div>
         </section>
         {/if}
