@@ -510,6 +510,8 @@
   let resolvingImages = new Set<string>();
 
   async function resolveImage(url: string): Promise<void> {
+    // Skip non-sidecar URLs when CivitAI lookup is disabled.
+    if (!url.startsWith("data:") && !civitaiLookupEnabled) return;
     if (resolvedImages[url] || resolvingImages.has(url)) return;
     resolvingImages.add(url);
     try {
@@ -526,6 +528,8 @@
 
   // Resolve the currently-visible image for a LoRA whenever it changes.
   $effect(() => {
+    // Skip non-sidecar URLs when CivitAI lookup is disabled.
+    if (!civitaiLookupEnabled) return;
     for (const loraName of Object.keys(cache)) {
       const url = currentImageUrl(loraName);
       if (url && !resolvedImages[url]) {
