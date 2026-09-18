@@ -845,8 +845,6 @@ export interface LoraCivitaiInfo {
   civitai_download_count?: number;
   civitai_thumbs_up_count?: number;
   civitai_creator?: string;
-  /** Source of the metadata: "civitai", "civarchive", or undefined. */
-  civitai_source?: string;
   modelspec_title?: string;
   modelspec_author?: string;
   modelspec_architecture?: string;

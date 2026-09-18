@@ -38,53 +38,6 @@ pub(crate) fn autov2_hash(full_hash: &str) -> String {
     full_hash[..10].to_string()
 }
 
-/// Scrape CivArchive HTML page and extract model metadata from __NEXT_DATA__.
-/// Returns (models_array, error_message).
-pub(crate) async fn scrape_civarchive_page(
-    http_client: &reqwest::Client,
-    sha256: &str,
-) -> Result<Vec<Value>, String> {
-    let url = format!("https://civarchive.com/sha256/{}", sha256);
-    let resp = http_client
-        .get(&url)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("HTTP error: {}", e))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-
-    let html = resp
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
-
-    // Extract __NEXT_DATA__ JSON from the HTML
-    let next_data_pattern = r#"id="__NEXT_DATA__" type="application/json">"#;
-    if let Some(start) = html.find(next_data_pattern) {
-        let json_start = start + next_data_pattern.len();
-        if let Some(end) = html[json_start..].find("</script>") {
-            let json_str = &html[json_start..json_start + end];
-            let data: Value =
-                serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-
-            // Navigate to props.pageProps.models
-            if let Some(models) = data.pointer("/props/pageProps/models") {
-                if let Some(arr) = models.as_array() {
-                    return Ok(arr.clone());
-                }
-            }
-        }
-    }
-
-    Err("Could not find model data in page".to_string())
-}
-
 #[derive(Debug, Serialize)]
 pub struct ModelHashResult {
     pub sha256: String,
@@ -5754,8 +5707,6 @@ pub struct LoraCivitaiInfo {
     pub modelspec_trigger_phrase: Option<String>,
     pub modelspec_description: Option<String>,
     pub modelspec_tags: Option<String>,
-    /// Source of the metadata: "civitai", "civarchive", or None.
-    pub civitai_source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -6046,7 +5997,6 @@ pub async fn get_lora_civitai_info(
         civitai_download_count: None,
         civitai_thumbs_up_count: None,
         civitai_creator: None,
-        civitai_source: None,
         modelspec_title: modelspec.as_ref().and_then(|m| m.get("title").cloned()),
         modelspec_author: modelspec.as_ref().and_then(|m| m.get("author").cloned()),
         modelspec_architecture: modelspec
@@ -6147,121 +6097,6 @@ pub async fn get_lora_civitai_info(
                         info.civitai_description = Some(desc.to_string());
                     }
                 }
-
-                // Mark as sourced from CivitAI
-                info.civitai_source = Some("civitai".to_string());
-            }
-        }
-    }
-
-    // Fallback to CivArchive if CivitAI lookup failed (404 or not found)
-    if info.civitai_model_id.is_none() {
-        match scrape_civarchive_page(&state.http_client, &sha256).await {
-            Ok(models) => {
-                // Use the first model (most relevant)
-                if let Some(model) = models.first() {
-                    info.civitai_name =
-                        model.get("name").and_then(|v| v.as_str()).map(String::from);
-                    info.civitai_description = model
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    info.civitai_creator = model
-                        .get("username")
-                        .or_else(|| model.get("creator_username"))
-                        .or_else(|| model.get("creator_name"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-
-                    // Extract version data from the model
-                    if let Some(version) = model.get("version") {
-                        info.civitai_base_model = version
-                            .get("base_model")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-
-                        // Trigger words
-                        if let Some(trigger) = version.get("trigger") {
-                            if let Some(words) = trigger.as_array() {
-                                info.civitai_trigger_words = words
-                                    .iter()
-                                    .filter_map(|w| w.as_str().map(String::from))
-                                    .collect();
-                            } else if let Some(word) = trigger.as_str() {
-                                info.civitai_trigger_words = word
-                                    .split(',')
-                                    .map(|s| s.trim().to_string())
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
-                            }
-                        }
-
-                        // Stats
-                        if let Some(dl) = version.get("download_count").and_then(|v| v.as_u64()) {
-                            info.civitai_download_count = Some(dl);
-                        }
-                        if let Some(rating) = version.get("rating").and_then(|v| v.as_f64()) {
-                            info.civitai_thumbs_up_count = Some((rating * 20.0) as u64);
-                        }
-
-                        // Images
-                        if let Some(images) = version.get("images").and_then(|v| v.as_array()) {
-                            info.civitai_images = images
-                                .iter()
-                                .filter_map(|img| {
-                                    img.get("url").and_then(|u| u.as_str()).map(|url| {
-                                        LoraCivitaiImage {
-                                            url: url.to_string(),
-                                            width: img
-                                                .get("width")
-                                                .and_then(|w| w.as_u64())
-                                                .map(|w| w as u32),
-                                            height: img
-                                                .get("height")
-                                                .and_then(|h| h.as_u64())
-                                                .map(|h| h as u32),
-                                            nsfw: None,
-                                        }
-                                    })
-                                })
-                                .collect();
-
-                            if info.thumbnail_url.is_none() {
-                                info.thumbnail_url =
-                                    info.civitai_images.first().map(|i| i.url.clone());
-                            }
-                        }
-                    }
-
-                    // Use download_count from model level if version doesn't have it
-                    if info.civitai_download_count.is_none() {
-                        if let Some(dl) = model.get("download_count").and_then(|v| v.as_u64()) {
-                            info.civitai_download_count = Some(dl);
-                        }
-                    }
-
-                    // Get model_id from platform URL if available
-                    if let Some(url) = model.get("url").and_then(|v| v.as_str()) {
-                        // Extract ID from URL like /tensorart/models/808168040555368367
-                        if let Some(id) = url.split("/").last() {
-                            if let Ok(id_num) = id.parse::<u64>() {
-                                info.civitai_model_id = Some(id_num);
-                            }
-                        }
-                    }
-
-                    log::debug!(
-                        "CivArchive fallback for lora '{}': found '{}' (trigger words: {:?})",
-                        filename,
-                        info.civitai_name.as_deref().unwrap_or("(unknown)"),
-                        info.civitai_trigger_words
-                    );
-
-                    info.civitai_source = Some("civarchive".to_string());
-                }
-            }
-            Err(e) => {
-                log::debug!("CivArchive scrape for lora '{}' failed: {}", filename, e);
             }
         }
     }

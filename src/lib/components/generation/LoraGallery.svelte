@@ -878,13 +878,6 @@
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
                 </a>
-              {:else if info?.civitai_source === 'civarchive'}
-                <span
-                  class="shrink-0 px-1 py-0.5 text-[9px] rounded bg-amber-500/20 border border-amber-500/40 text-amber-300"
-                  title="Model found on CivArchive (CivitAI mirror)"
-                >
-                  Archive
-                </span>
               {/if}
             </div>
 
